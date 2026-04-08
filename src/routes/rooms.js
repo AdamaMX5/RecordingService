@@ -1,9 +1,32 @@
 'use strict';
 
 const { Router } = require('express');
+const fs   = require('fs');
+const path = require('path');
 const { listRooms, listParticipants } = require('../services/livekitService');
 const { startRecording, stopRecording, stopRoomRecordings } = require('../services/recorderService');
-const store = require('../store/recordingStore');
+const store  = require('../store/recordingStore');
+const config = require('../config');
+
+/** Return all .webm files for a room, sorted newest-first. */
+function getRoomVideos(roomName) {
+  const safe    = roomName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const roomDir = path.join(config.recordingsDir, safe);
+  if (!fs.existsSync(roomDir)) return [];
+
+  const results = [];
+  for (const dateDirent of fs.readdirSync(roomDir, { withFileTypes: true })) {
+    if (!dateDirent.isDirectory() || dateDirent.name.startsWith('.')) continue;
+    const dateDir = path.join(roomDir, dateDirent.name);
+    for (const fileDirent of fs.readdirSync(dateDir, { withFileTypes: true })) {
+      if (!fileDirent.isFile() || !fileDirent.name.endsWith('.webm') || fileDirent.name.startsWith('.')) continue;
+      const filePath = path.join(dateDir, fileDirent.name);
+      const stat     = fs.statSync(filePath);
+      results.push({ filename: fileDirent.name, date: dateDirent.name, filePath, size: stat.size, created: stat.birthtime });
+    }
+  }
+  return results.sort((a, b) => b.created - a.created);
+}
 
 const router = Router();
 
@@ -149,6 +172,57 @@ router.delete('/:roomName/participants/:identity/record', async (req, res, next)
   } catch (err) {
     next(err);
   }
+});
+
+// ─── Room video discovery & download ─────────────────────────────────────────
+
+/**
+ * GET /rooms/:roomName/videos
+ * List all completed recording files for a room.
+ */
+router.get('/:roomName/videos', (req, res) => {
+  const videos = getRoomVideos(req.params.roomName);
+  res.json({
+    roomName: req.params.roomName,
+    videos:   videos.map(({ filename, date, size, created }) => ({ filename, date, size, created })),
+  });
+});
+
+/**
+ * GET /rooms/:roomName/videos/latest
+ * Stream (or download) the most recent recording for a room.
+ * Add ?download=1 to force Content-Disposition: attachment.
+ */
+router.get('/:roomName/videos/latest', (req, res) => {
+  const videos = getRoomVideos(req.params.roomName);
+  if (videos.length === 0) return res.status(404).json({ error: 'No recordings found for this room' });
+
+  const { filename, filePath } = videos[0];
+  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+  res.setHeader('Content-Type', 'video/webm');
+  res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
+  res.sendFile(filePath);
+});
+
+/**
+ * GET /rooms/:roomName/videos/:filename
+ * Stream (or download) a specific recording by filename.
+ * Add ?download=1 to force Content-Disposition: attachment.
+ */
+router.get('/:roomName/videos/:filename', (req, res) => {
+  const { filename } = req.params;
+  if (!filename.endsWith('.webm') || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+
+  const videos = getRoomVideos(req.params.roomName);
+  const found  = videos.find(v => v.filename === filename);
+  if (!found) return res.status(404).json({ error: 'File not found' });
+
+  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+  res.setHeader('Content-Type', 'video/webm');
+  res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
+  res.sendFile(found.filePath);
 });
 
 module.exports = router;
