@@ -2,37 +2,11 @@
 
 require('dotenv').config();
 const express = require('express');
-const cors    = require('cors');
 const config  = require('./config');
 const logger  = require('./logger');
 const apiRouter = require('./routes/index');
 
-function getCorsSettings() {
-  const originsRaw = process.env.CORS_ORIGINS || '';
-  const origins = originsRaw
-    .split(',')
-    .map(o => o.trim())
-    .filter(Boolean);
-
-  if (origins.length === 0) {
-    logger.warn('CORS_ORIGINS is not set — all origins will be blocked by CORS policy');
-  }
-
-  const methodsRaw  = process.env.CORS_METHODS  || '*';
-  const headersRaw  = process.env.CORS_HEADERS  || '*';
-  const credentials = (process.env.CORS_ALLOW_CREDENTIALS || 'true') === 'true';
-
-  return {
-    origin:      origins.length > 0 ? origins : false,
-    methods:     methodsRaw  === '*' ? methodsRaw  : methodsRaw.split(',').map(m => m.trim()),
-    allowedHeaders: headersRaw === '*' ? headersRaw : headersRaw.split(',').map(h => h.trim()),
-    credentials,
-  };
-}
-
 const app = express();
-
-app.use(cors(getCorsSettings()));
 app.use(express.json());
 
 app.use(apiRouter);
